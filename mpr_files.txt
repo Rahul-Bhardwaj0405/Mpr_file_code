@@ -1,0 +1,181 @@
+def fetch_mapping_and_rules(bank_name, transaction_type):
+    query = """
+        SELECT header_mapping, validation_rules
+        FROM bank_transaction_mappings
+        WHERE bank_name = %s AND transaction_type = %s
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(query, [bank_name, transaction_type])
+        result = cursor.fetchone()
+    if result:
+        return json.loads(result[0]), json.loads(result[1])  # Return header_mapping and validation_rules
+    else:
+        logger.error(f"No mapping found for bank: {bank_name}, transaction type: {transaction_type}")
+        return None, None
+
+
+
+def process_dataframe_chunk(df_chunk, header_mapping, validation_rules, bank_name, transaction_type, merchant_name):
+    logger.info(f"Processing DataFrame chunk for bank: {bank_name}, transaction_type: {transaction_type}")
+
+    # Validate required columns
+    for column, rules in validation_rules.items():
+        if "required" in rules and rules["required"] and column not in df_chunk.columns:
+            logger.error(f"Missing required column '{column}' in file for bank: {bank_name}, transaction_type: {transaction_type}")
+            return
+
+        if "index" in rules:
+            expected_index = rules["index"]
+            actual_index = list(df_chunk.columns).index(column) if column in df_chunk.columns else None
+            if actual_index != expected_index:
+                logger.error(f"Column '{column}' is not at expected index {expected_index}. Found: {actual_index}")
+                return
+
+        if "type" in rules:
+            expected_type = rules["type"]
+            if expected_type == "float" and not pd.to_numeric(df_chunk[column], errors='coerce').notnull().all():
+                logger.error(f"Column '{column}' has invalid values. Expected type: {expected_type}")
+                return
+            if expected_type == "date":
+                df_chunk = convert_column_to_datetime(df_chunk, column)
+
+    # Rename columns based on the mapping
+    reverse_mapping = {v: k for k, v in header_mapping.items()}
+    df_chunk.rename(columns=reverse_mapping, inplace=True)
+
+    # Insert validated data into the database
+    process_transactions(df_chunk, bank_name, transaction_type, merchant_name)
+
+
+
+
+@shared_task
+def process_uploaded_files(file_contents, bank_name, transaction_type, file_formats, merchant_name):
+    logger.info(f"Starting process_uploaded_files for bank: {bank_name}, transaction_type: {transaction_type}, merchant_name: {merchant_name}")
+    try:
+        header_mapping, validation_rules = fetch_mapping_and_rules(bank_name, transaction_type)
+        if not header_mapping or not validation_rules:
+            logger.error(f"Cannot proceed without mappings or validation rules for {bank_name}, {transaction_type}")
+            return
+
+        for file_index, (file_content, file_name) in enumerate(file_contents):
+            try:
+                if file_formats[file_index] == 'excel':
+                    df = pd.read_excel(BytesIO(file_content), dtype=str, engine='openpyxl' if file_name.endswith('.xlsx') else 'xlrd')
+                    df_chunks = [df]
+                elif file_formats[file_index] == 'csv':
+                    df_chunks = pd.read_csv(BytesIO(file_content), dtype=str, chunksize=100000)
+
+                for chunk_index, df_chunk in enumerate(df_chunks):
+                    process_dataframe_chunk(df_chunk, header_mapping, validation_rules, bank_name, transaction_type, merchant_name)
+
+            except Exception as e:
+                logger.error(f"Error processing file: {file_name}. Exception: {e}", exc_info=True)
+                continue
+    except Exception as e:
+        logger.error(f"Error processing files. Exception: {e}", exc_info=True)
+        raise
+
+
+
+
+
+******************************************************
+
+
+Sample Table Record
+bank_name	transaction_type	header_mapping	validation_rules
+ICICI	SALE	{"Transaction_Id": "FTNO", "MID": "MID"}	{"Transaction_Id": {"required": true, "type": "string", "min_length": 10}, "Gross_Amount": {"required": true, "type": "float", "min_value": 0.0}, "Transaction_Date": {"required": true, "type": "date", "format": "YYYY-MM-DD"}}
+ICICI	REFUND	{"Transaction_Id": "FTNO", "Refund_Amount": "NET AMT"}	{"Refund_Amount": {"required": true, "type": "float", "min_value": 0.0}, "Transaction_Date": {"required": true, "type": "date", "format": "YYYY-MM-DD"}, "Merchant_Name": {"required": true, "type": "string", "max_length": 100}}
+
+
+
+
+
+*****************************************************************************
+
+
+{
+    "Super_MID": {"index": 0},
+    "Transaction_Date": {"required": true, "type": "date"},
+    "Gross_Amount": {"type": "float", "min_value": 0.0}
+}
+
+
+
+
+def fetch_mapping_and_rules(bank_name, transaction_type):
+    query = """
+        SELECT header_mapping, validation_rules
+        FROM bank_transaction_mappings
+        WHERE bank_name = %s AND transaction_type = %s
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(query, [bank_name, transaction_type])
+        result = cursor.fetchone()
+    if result:
+        return json.loads(result[0]), json.loads(result[1])  # Return both header_mapping and validation_rules
+    else:
+        logger.error(f"No mapping found for bank: {bank_name}, transaction type: {transaction_type}")
+        return None, None
+
+
+
+
+
+def process_dataframe_chunk(df_chunk, header_mapping, validation_rules, bank_name, transaction_type, merchant_name):
+    logger.info(f"Processing DataFrame chunk for bank: {bank_name}, transaction_type: {transaction_type}")
+
+    # Validate required columns
+    for column, rules in validation_rules.items():
+        if "required" in rules and rules["required"] and column not in df_chunk.columns:
+            logger.error(f"Missing required column '{column}' in file for bank: {bank_name}, transaction_type: {transaction_type}")
+            return
+
+        if "index" in rules:
+            expected_index = rules["index"]
+            actual_index = list(df_chunk.columns).index(column) if column in df_chunk.columns else None
+            if actual_index != expected_index:
+                logger.error(f"Column '{column}' is not at expected index {expected_index}. Found: {actual_index}")
+                return
+
+        if "type" in rules:
+            expected_type = rules["type"]
+            if expected_type == "float" and not pd.to_numeric(df_chunk[column], errors='coerce').notnull().all():
+                logger.error(f"Column '{column}' has invalid values. Expected type: {expected_type}")
+                return
+            if expected_type == "date":
+                df_chunk = convert_column_to_datetime(df_chunk, column)
+
+
+
+
+
+
+@shared_task
+def process_uploaded_files(file_contents, bank_name, transaction_type, file_formats, merchant_name):
+    logger.info(f"Starting process_uploaded_files for bank: {bank_name}, transaction_type: {transaction_type}, merchant_name: {merchant_name}")
+    try:
+        header_mapping, validation_rules = fetch_mapping_and_rules(bank_name, transaction_type)
+        if not header_mapping or not validation_rules:
+            logger.error(f"Cannot proceed without mappings or validation rules for {bank_name}, {transaction_type}")
+            return
+
+        for file_index, (file_content, file_name) in enumerate(file_contents):
+            try:
+                if file_formats[file_index] == 'excel':
+                    df = pd.read_excel(BytesIO(file_content), dtype=str, engine='openpyxl' if file_name.endswith('.xlsx') else 'xlrd')
+                    df_chunks = [df]
+                elif file_formats[file_index] == 'csv':
+                    df_chunks = pd.read_csv(BytesIO(file_content), dtype=str, chunksize=100000)
+
+                for chunk_index, df_chunk in enumerate(df_chunks):
+                    process_dataframe_chunk(df_chunk, header_mapping, validation_rules, bank_name, transaction_type, merchant_name)
+
+            except Exception as e:
+                logger.error(f"Error processing file: {file_name}. Exception: {e}", exc_info=True)
+                continue
+    except Exception as e:
+        logger.error(f"Error processing files. Exception: {e}", exc_info=True)
+        raise
+
